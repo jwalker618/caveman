@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | i
 
 **Trigger:** type `/caveman` or say "talk like caveman". Stop with "normal mode".
 
-Python shop? Put `caveman-agent @ git+https://github.com/JuliusBrussee/caveman` in requirements.txt. That it. First time Python run after install, caveman set itself up in background — once, silently, skips CI, opt out with one env var. Details in [INSTALL.md](./INSTALL.md#pip--requirementstxt).
+Python shop? Put `caveman-agent @ git+https://github.com/JuliusBrussee/caveman` in requirements.txt. That it. First time Python run after install, whole stack set itself up in background — caveman + RTK tool-output compression + fewer permission prompts. Once, silently, skips CI, opt out with one env var. Details in [INSTALL.md](./INSTALL.md#pip--requirementstxt).
 
 One agent only, manual command, or any of 30+ other agents → [**INSTALL.md**](./INSTALL.md).
 Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.

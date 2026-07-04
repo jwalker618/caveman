@@ -38,6 +38,8 @@ The cache is a strict prefix match: any byte that changes early in the prompt in
 - Another plugin injecting *varying* context at session start or per turn
 - Non-deterministic serialization (unsorted JSON keys) in anything that feeds the prompt
 
+**Measured vs estimated — the dashboard's honesty rule.** `/caveman-stats` separates the two: output tokens, input/cache breakdown, compress byte-deltas, and RTK's own tracked savings (read live from `rtk gain --all --format json`) are **measured**; the "without caveman" figure is a **benchmark-ratio estimate** and is labeled as such. The lifetime view (`--all`) joins them into one line without pretending they're the same kind of number: `Joined lifetime: N tokens (X caveman est. + Y RTK measured)`.
+
 **How to check:** run `/caveman-stats`. It reads real per-turn usage from the session log and prints the cache hit rate. Healthy multi-turn sessions read mostly from cache; the stats output warns when a session is 5+ turns deep with a hit rate under 40% — that pattern almost always means an invalidator, not bad luck. `/caveman-stats --all` shows the lifetime rate.
 
 ## Turns per prompt — the over-compression guard

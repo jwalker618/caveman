@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const child_process = require('child_process');
 const { readFlag, appendFlag, readHistory, safeWriteFlag } = require('./caveman-config');
 
 // Mean per-task savings from benchmarks/results/*.json (avg_savings: 65 across
@@ -132,6 +133,39 @@ function cacheHitRate({ inputTokens = 0, cacheCreationTokens = 0, cacheReadToken
 const CACHE_WARN_MIN_TURNS = 5;
 const CACHE_WARN_BELOW = 0.4;
 
+// ── RTK (rust-token-killer) integration ────────────────────────────────────
+// RTK tracks its own MEASURED savings (before/after token counts on shell
+// output). `rtk gain --all --format json` exports them; we fold the lifetime
+// number into the joined dashboard. RTK's exact JSON shape isn't a contract
+// we control, so extraction is tolerant: walk the tree, take the largest
+// numeric value under a key mentioning saved/savings (lifetime ≥ any window).
+// Silent null when rtk is absent, slow, or the shape changes — stats must
+// never break because a third-party tool did.
+function extractRtkSaved(node, depth = 0) {
+  if (depth > 6 || node === null || typeof node !== 'object') return null;
+  let best = null;
+  for (const [key, value] of Object.entries(node)) {
+    if (typeof value === 'number' && Number.isFinite(value) && /sav(ed|ings?)/i.test(key)) {
+      if (best === null || value > best) best = value;
+    } else if (value && typeof value === 'object') {
+      const inner = extractRtkSaved(value, depth + 1);
+      if (inner !== null && (best === null || inner > best)) best = inner;
+    }
+  }
+  return best;
+}
+
+function readRtkSavings() {
+  try {
+    const r = child_process.spawnSync('rtk', ['gain', '--all', '--format', 'json'], {
+      encoding: 'utf8', timeout: 3000, shell: process.platform === 'win32',
+    });
+    if (!r || r.status !== 0 || !r.stdout) return null;
+    const saved = extractRtkSaved(JSON.parse(r.stdout));
+    return saved !== null && saved > 0 ? { savedTokens: Math.round(saved) } : null;
+  } catch { return null; }
+}
+
 // Detect *.original.md / *.md pairs left behind by caveman-compress. The
 // presence of a *.original.md backup means the *.md sibling is a compressed
 // memory file — every session start reads the compressed version, so the
@@ -234,7 +268,7 @@ function humanizeTokens(n) {
 
 function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, since,
                          inputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0,
-                         userPrompts = 0, assistantTurns = 0 }) {
+                         userPrompts = 0, assistantTurns = 0, rtk = null }) {
   const sep = '──────────────────────────────────';
   const window = since ? ` (last ${since})` : '';
   if (sessions === 0) {
@@ -247,11 +281,22 @@ function formatHistory({ sessions, outputTokens, estSavedTokens, estSavedUsd, si
   const cacheLine = hitRate !== null ? `Cache hit rate:        ${Math.round(hitRate * 100)}%\n` : '';
   const turnsLine = userPrompts > 0 && assistantTurns > 0
     ? `Turns per prompt:      ${(assistantTurns / userPrompts).toFixed(1)}\n` : '';
+  // Joined view: caveman's lifetime figure is an estimate, RTK's is measured
+  // — different bases, so the joined total says which is which instead of
+  // pretending they're the same kind of number.
+  let rtkLines = '';
+  if (rtk && rtk.savedTokens > 0) {
+    const joined = estSavedTokens + rtk.savedTokens;
+    rtkLines =
+      `RTK measured saved:    ${rtk.savedTokens.toLocaleString()} (lifetime, from rtk)\n` +
+      `Joined lifetime:       ${joined.toLocaleString()} tokens ` +
+      `(${estSavedTokens.toLocaleString()} caveman est. + ${rtk.savedTokens.toLocaleString()} RTK measured)\n`;
+  }
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${sessions.toLocaleString()}\n${sep}\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
     `Est. tokens saved:     ${estSavedTokens.toLocaleString()}\n` +
-    usdLine + cacheLine + turnsLine + sep + '\n';
+    usdLine + cacheLine + turnsLine + rtkLines + sep + '\n';
 }
 
 // Single-line tweetable summary. Stays human-friendly when no ratio is known.
@@ -276,7 +321,7 @@ function formatShare({ outputTokens, turns, mode, model }) {
 
 // Pure formatter — separated from main() so tests can pass synthetic inputs.
 function formatStats({ outputTokens, inputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0,
-                       turns, userPrompts = 0, mode, model, sessionPath, compressed }) {
+                       turns, userPrompts = 0, mode, model, sessionPath, compressed, rtk = null }) {
   const sep = '──────────────────────────────────';
   const shortPath = sessionPath && sessionPath.length > 45
     ? '...' + sessionPath.slice(-45)
@@ -349,19 +394,29 @@ function formatStats({ outputTokens, inputTokens = 0, cacheCreationTokens = 0, c
   let memoryLine = '';
   if (compressed && compressed.count > 0) {
     const tokensApprox = compressed.tokensSaved.toLocaleString();
-    memoryLine = `${sep}\nMemory compressed:     ${compressed.count} file${compressed.count === 1 ? '' : 's'}, ` +
+    memoryLine = `Memory compressed:     ${compressed.count} file${compressed.count === 1 ? '' : 's'}, ` +
       `~${tokensApprox} tokens saved per session start (approx)\n`;
   }
+
+  // Measured vs estimated is the honesty line of this dashboard: token
+  // counts, cache reads, compress deltas, and RTK's numbers are real; the
+  // "without caveman" figure is a benchmark ratio and says so.
+  const rtkLine = rtk && rtk.savedTokens > 0
+    ? `RTK tool-output saved: ${rtk.savedTokens.toLocaleString()} (lifetime, measured by rtk)\n`
+    : '';
 
   return `\nCaveman Stats\n${sep}\n` +
     (shortPath ? `Session:  ${shortPath}\n` : '') +
     `${turnsLine}\n${sep}\n` +
+    `Measured (from session log)\n` +
     `Output tokens:         ${outputTokens.toLocaleString()}\n` +
     inputLines +
+    memoryLine +
+    rtkLine +
     cacheWarning +
     `${sep}\n` +
+    `Estimated (benchmark ratio — not a measurement)\n` +
     `${savings}\n` +
-    memoryLine +
     (footer ? footer + '\n' : '');
 }
 
@@ -385,7 +440,7 @@ function main() {
       process.exit(2);
     }
     const agg = aggregateHistory(historyPath, sinceMs);
-    process.stdout.write(formatHistory({ ...agg, since: sinceArg || null }));
+    process.stdout.write(formatHistory({ ...agg, since: sinceArg || null, rtk: readRtkSavings() }));
     return;
   }
 
@@ -434,7 +489,7 @@ function main() {
   } else {
     const scanDirs = [claudeDir, process.cwd()].filter((d, i, a) => a.indexOf(d) === i);
     const compressed = summarizeCompressed(findCompressedPairs(scanDirs));
-    process.stdout.write(formatStats({ ...parsed, mode, sessionPath: sessionFile, compressed }));
+    process.stdout.write(formatStats({ ...parsed, mode, sessionPath: sessionFile, compressed, rtk: readRtkSavings() }));
   }
 }
 
@@ -445,4 +500,5 @@ module.exports = {
   parseSession, priceForModel, formatUsd, COMPRESSION, MODEL_OUTPUT_PRICE_PER_M,
   findCompressedPairs, summarizeCompressed, humanizeTokens,
   isUserPrompt, cacheHitRate, CACHE_WARN_MIN_TURNS, CACHE_WARN_BELOW,
+  readRtkSavings, extractRtkSaved,
 };

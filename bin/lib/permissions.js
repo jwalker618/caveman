@@ -88,7 +88,17 @@ const DEV_EXTRA = [
 const PRESETS = {
   readonly: READONLY,
   dev: [...READONLY, ...DEV_EXTRA],
+  // 'auto' = the dev allowlist PLUS permissions.defaultMode: "acceptEdits" —
+  // file edits and listed commands run without prompting; destructive /
+  // network / install commands still ask. This is the fork's product default
+  // ("largely permissionless"), one notch below bypassPermissions.
+  auto: [...READONLY, ...DEV_EXTRA],
 };
+
+// Tiers that also set a permission default mode. We only ever set
+// 'acceptEdits' — never 'bypassPermissions' (users who want full YOLO can set
+// that themselves; it shouldn't arrive via a preset).
+const MODE_BY_TIER = { auto: 'acceptEdits' };
 
 // Every entry we could ever have written, across tiers — the strip set.
 const ALL_MANAGED = new Set([...READONLY, ...DEV_EXTRA]);
@@ -109,6 +119,13 @@ function addAutoallow(settings, tier) {
     have.add(rule);
     added++;
   }
+  // Mode-setting tiers: only claim defaultMode when the user hasn't chosen
+  // one (absent or explicit 'default') — never clobber an existing choice
+  // like 'plan'. removeAutoallow undoes exactly this.
+  const mode = MODE_BY_TIER[tier];
+  if (mode && (!settings.permissions.defaultMode || settings.permissions.defaultMode === 'default')) {
+    settings.permissions.defaultMode = mode;
+  }
   return added;
 }
 
@@ -116,14 +133,23 @@ function addAutoallow(settings, tier) {
 // User-authored rules (anything not string-equal to a preset entry) survive.
 // Returns the number removed.
 function removeAutoallow(settings) {
-  const allow = settings && settings.permissions && settings.permissions.allow;
-  if (!Array.isArray(allow)) return 0;
-  const before = allow.length;
-  settings.permissions.allow = allow.filter(rule => !ALL_MANAGED.has(rule));
-  const removed = before - settings.permissions.allow.length;
-  if (settings.permissions.allow.length === 0) delete settings.permissions.allow;
+  if (!settings || !settings.permissions || typeof settings.permissions !== 'object') return 0;
+  let removed = 0;
+  const allow = settings.permissions.allow;
+  if (Array.isArray(allow)) {
+    const before = allow.length;
+    settings.permissions.allow = allow.filter(rule => !ALL_MANAGED.has(rule));
+    removed = before - settings.permissions.allow.length;
+    if (settings.permissions.allow.length === 0) delete settings.permissions.allow;
+  }
+  // Undo the 'auto' tier's mode claim. We only ever set 'acceptEdits', so
+  // that's the only value we remove — a user-chosen 'plan'/'bypassPermissions'
+  // survives.
+  if (settings.permissions.defaultMode === 'acceptEdits') {
+    delete settings.permissions.defaultMode;
+  }
   if (Object.keys(settings.permissions).length === 0) delete settings.permissions;
   return removed;
 }
 
-module.exports = { PRESETS, READONLY, DEV_EXTRA, ALL_MANAGED, addAutoallow, removeAutoallow };
+module.exports = { PRESETS, MODE_BY_TIER, READONLY, DEV_EXTRA, ALL_MANAGED, addAutoallow, removeAutoallow };

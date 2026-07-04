@@ -167,3 +167,27 @@ def test_bootstrap_skips_ci():
         r = _import_bootstrap(_bootstrap_env(tmp, CI="true"))
         assert r.returncode == 0
         assert not (Path(tmp) / ".caveman-pip-bootstrap").exists()
+
+
+def test_bootstrap_product_defaults_include_rtk_and_permissions():
+    # Fork product defaults: bare pip install = full stack. Setting the env
+    # var REPLACES the defaults (opt-down is CAVEMAN_AUTO_INSTALL_ARGS="").
+    os.environ["CAVEMAN_NO_AUTO_INSTALL"] = "1"  # inert import
+    sys.path.insert(0, str(ROOT / "python"))
+    try:
+        from caveman_agent._bootstrap import _install_args
+        saved = os.environ.pop("CAVEMAN_AUTO_INSTALL_ARGS", None)
+        try:
+            assert _install_args() == ["--non-interactive", "--with-rtk", "--with-autoallow=auto"]
+            os.environ["CAVEMAN_AUTO_INSTALL_ARGS"] = "--dry-run"
+            assert _install_args() == ["--non-interactive", "--dry-run"]
+            os.environ["CAVEMAN_AUTO_INSTALL_ARGS"] = ""
+            assert _install_args() == ["--non-interactive"]
+        finally:
+            if saved is None:
+                os.environ.pop("CAVEMAN_AUTO_INSTALL_ARGS", None)
+            else:
+                os.environ["CAVEMAN_AUTO_INSTALL_ARGS"] = saved
+    finally:
+        sys.path.pop(0)
+        os.environ.pop("CAVEMAN_NO_AUTO_INSTALL", None)

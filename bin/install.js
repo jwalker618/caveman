@@ -1091,7 +1091,11 @@ function installAutoallow(ctx) {
   SETTINGS.writeSettings(settingsPath, settings);
   ok(`  added ${added} auto-allowed command rule${added === 1 ? '' : 's'} (${tier} tier)`);
   note('  these stop the permission prompt for read-only inspection commands' +
-       (tier === 'dev' ? ' + test/lint/build runners' : '') + '.');
+       (tier !== 'readonly' ? ' + test/lint/build runners' : '') + '.');
+  if (PERMS.MODE_BY_TIER[tier] && settings.permissions &&
+      settings.permissions.defaultMode === PERMS.MODE_BY_TIER[tier]) {
+    note(`  default permission mode set to '${PERMS.MODE_BY_TIER[tier]}' — file edits no longer prompt.`);
+  }
   note('  review or edit anytime: /permissions inside Claude Code, or settings.json → permissions.allow');
   ctx.results.installed.push(`autoallow (${tier})`);
 }
@@ -1403,8 +1407,10 @@ FLAGS
                         Claude Code: merge a curated permission allowlist into
                         settings.json so safe commands stop prompting. Tiers:
                         readonly (default — ls/cat/grep/git-read/version
-                        probes) or dev (readonly + test/lint/build runners).
-                        Everything else still prompts. Removed on --uninstall.
+                        probes), dev (readonly + test/lint/build runners), or
+                        auto (dev + permissions.defaultMode acceptEdits: file
+                        edits stop prompting too). Destructive/network/install
+                        commands always still prompt. Removed on --uninstall.
   --with-rtk            Also install RTK (rust-token-killer, third-party MIT)
                         for tool-output compression, and wire its Claude Code
                         hook via \`rtk init -g\`. Uses RTK's official installer
