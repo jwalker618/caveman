@@ -23,6 +23,7 @@ const readline = require('readline');
 const crypto = require('crypto');
 
 const SETTINGS = require('./lib/settings');
+const PERMS = require('./lib/permissions');
 const OPENCLAW = require('./lib/openclaw');
 const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
 
@@ -38,6 +39,12 @@ const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/${PINNED_REF}`;
 const HOOKS_REMOTE = `${RAW_BASE}/src/hooks`;
 const INIT_SCRIPT_URL = `${RAW_BASE}/src/tools/caveman-init.js`;
 const MCP_SHRINK_PKG = 'caveman-shrink';
+// RTK (rust-token-killer) — third-party MIT tool-output compressor we can
+// optionally install as part of the single-install stack (--with-rtk). We
+// never vendor it; we run its official install paths and its own Claude Code
+// hook wiring (`rtk init -g`). https://github.com/rtk-ai/rtk
+const RTK_INSTALL_URL = 'https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh';
+const RTK_RELEASES_URL = 'https://github.com/rtk-ai/rtk/releases';
 // Hook files to copy. Statusline ships in both .sh (macOS/Linux) and .ps1
 // (Windows) flavors — copy both regardless of host OS so a roaming
 // $CLAUDE_CONFIG_DIR (e.g. dotfiles repo) keeps working across platforms.
@@ -59,6 +66,7 @@ function parseArgs(argv) {
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
     configDir: null, help: false,
+    withAutoallow: false, withRtk: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -76,8 +84,20 @@ function parseArgs(argv) {
       opts.withMcpShrink = tokens;
       continue;
     }
+    // --with-autoallow[=tier] — curated permission allowlist (default tier:
+    // readonly). Handled before the switch for the GNU-style =value form.
+    if (a.startsWith('--with-autoallow=')) {
+      const tier = a.slice('--with-autoallow='.length).trim();
+      if (!PERMS.PRESETS[tier]) {
+        die(`error: unknown autoallow tier: ${tier}\n  valid tiers: ${Object.keys(PERMS.PRESETS).join(', ')}`);
+      }
+      opts.withAutoallow = tier;
+      continue;
+    }
     switch (a) {
       case '--dry-run': opts.dryRun = true; break;
+      case '--with-autoallow': opts.withAutoallow = 'readonly'; break;
+      case '--with-rtk': opts.withRtk = true; break;
       case '--force': opts.force = true; break;
       case '--skip-skills': opts.skipSkills = true; break;
       case '--with-hooks': opts.withHooks = true; break;
@@ -137,7 +157,10 @@ function parseArgs(argv) {
   //     command, so there's no sensible "everything on" default (issue #474).
   //     Opt in explicitly with --with-mcp-shrink="<upstream cmd>".
   if (opts.all) { opts.withInit = true; }
-  if (opts.minimal) { opts.withHooks = false; opts.withInit = false; opts.withMcpShrink = false; }
+  if (opts.minimal) {
+    opts.withHooks = false; opts.withInit = false; opts.withMcpShrink = false;
+    opts.withAutoallow = false; opts.withRtk = false;
+  }
   // Validate --only ids against the provider matrix. PROVIDERS is defined later
   // in the file but is in scope by the time this function runs.
   if (opts.only.length) {
@@ -1037,6 +1060,95 @@ async function loadRemoteHookChecksums() {
 }
 
 // ── Uninstall ─────────────────────────────────────────────────────────────
+// ── --with-autoallow ───────────────────────────────────────────────────────
+// Merge the curated permission preset into settings.json → permissions.allow.
+// This is the middle ground between prompt-on-everything and
+// --dangerously-skip-permissions: read-only inspection commands (and, on the
+// dev tier, test/lint/build runners) stop prompting; everything else still
+// asks. Goes through the same JSONC-tolerant read + atomic write as hooks.
+function installAutoallow(ctx) {
+  const { say, note, warn, ok, opts, configDir } = ctx;
+  const tier = opts.withAutoallow;
+  say(`→ merging '${tier}' permission allowlist into settings.json (--with-autoallow)`);
+  const settingsPath = path.join(configDir, 'settings.json');
+  const settings = SETTINGS.readSettings(settingsPath);
+  if (settings === null) {
+    warn(`  ${settingsPath} is not valid JSON/JSONC — refusing to touch it`);
+    ctx.results.failed.push(['autoallow', 'settings.json unparseable']);
+    return;
+  }
+  const added = PERMS.addAutoallow(settings, tier);
+  if (opts.dryRun) {
+    note(`  would add ${added} permission rule${added === 1 ? '' : 's'} (${tier} tier) to ${settingsPath}`);
+    return;
+  }
+  if (added === 0) {
+    note('  all preset rules already present — nothing to do');
+    ctx.results.skipped.push(['autoallow', 'already configured']);
+    return;
+  }
+  SETTINGS.validateHookFields(settings);
+  SETTINGS.writeSettings(settingsPath, settings);
+  ok(`  added ${added} auto-allowed command rule${added === 1 ? '' : 's'} (${tier} tier)`);
+  note('  these stop the permission prompt for read-only inspection commands' +
+       (tier === 'dev' ? ' + test/lint/build runners' : '') + '.');
+  note('  review or edit anytime: /permissions inside Claude Code, or settings.json → permissions.allow');
+  ctx.results.installed.push(`autoallow (${tier})`);
+}
+
+// ── --with-rtk ─────────────────────────────────────────────────────────────
+// Install RTK (rust-token-killer) and wire its Claude Code hook, so the full
+// token stack is one command. We only drive RTK's OFFICIAL install paths:
+// brew when available, otherwise its published install script, and `rtk init
+// -g` for the PreToolUse hook. Never fatal — a missing RTK shouldn't sink the
+// caveman install.
+function installRtk(ctx) {
+  const { say, note, warn, ok, opts } = ctx;
+  say('→ installing RTK (rust-token-killer) tool-output compressor (--with-rtk)');
+  if (!hasCmd('rtk')) {
+    if (process.platform === 'win32') {
+      warn('  no automated RTK install on Windows — grab a binary from:');
+      note(`  ${RTK_RELEASES_URL}`);
+      ctx.results.skipped.push(['rtk', 'manual install needed on Windows']);
+      return;
+    }
+    let r;
+    if (hasCmd('brew')) {
+      note('  via Homebrew: brew install rtk');
+      r = runSpawn('brew', ['install', 'rtk'], null, opts.dryRun);
+    } else {
+      note(`  via RTK's official install script: ${RTK_INSTALL_URL}`);
+      r = runSpawn('sh', ['-c', `curl -fsSL "${RTK_INSTALL_URL}" | sh`], null, opts.dryRun);
+    }
+    if (!opts.dryRun && ((r && r.status) || 0) !== 0) {
+      warn('  RTK install failed — caveman install continues without it');
+      note(`  manual options: brew install rtk, or ${RTK_RELEASES_URL}`);
+      ctx.results.failed.push(['rtk', 'install command failed']);
+      return;
+    }
+  } else {
+    note('  rtk already on PATH — skipping binary install');
+  }
+  // Wire RTK's own Claude Code integration (PreToolUse command rewrite hook).
+  if (opts.dryRun) {
+    note('  would run: rtk init -g   (wires RTK\'s Claude Code hook)');
+    return;
+  }
+  if (hasCmd('rtk')) {
+    const r = runSpawn('rtk', ['init', '-g'], null, false);
+    if (((r && r.status) || 0) === 0) {
+      ok('  rtk hook wired — restart Claude Code to activate');
+      ctx.results.installed.push('rtk (tool-output compression)');
+    } else {
+      warn('  rtk installed but `rtk init -g` failed — run it manually');
+      ctx.results.failed.push(['rtk', 'rtk init -g failed']);
+    }
+  } else {
+    warn('  rtk still not on PATH after install (new shell needed?) — run `rtk init -g` manually');
+    ctx.results.skipped.push(['rtk', 'binary not on PATH yet']);
+  }
+}
+
 function uninstall(ctx) {
   const { say, note, warn, ok, opts, configDir } = ctx;
   say('🪨 caveman uninstall');
@@ -1055,9 +1167,13 @@ function uninstall(ctx) {
         const cmd = typeof settings.statusLine === 'string' ? settings.statusLine : (settings.statusLine.command || '');
         if (cmd.includes('caveman-statusline')) delete settings.statusLine;
       }
+      // Strip autoallow preset entries (exact match only — user-authored
+      // permission rules are never touched).
+      const removedPerms = PERMS.removeAutoallow(settings);
       SETTINGS.validateHookFields(settings);
       if (!opts.dryRun) SETTINGS.writeSettings(settingsPath, settings);
       ok(`  removed ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`);
+      if (removedPerms) ok(`  removed ${removedPerms} auto-allow permission rule${removedPerms === 1 ? '' : 's'}`);
     }
   }
 
@@ -1089,6 +1205,14 @@ function uninstall(ctx) {
     if (mcpHelp.status === 0) {
       runSpawn('claude', ['mcp', 'remove', 'caveman-shrink'], null, opts.dryRun);
     }
+  }
+
+  // RTK is third-party — we never uninstall someone else's binary or hook.
+  // Just point at the way out.
+  if (hasCmd('rtk')) {
+    note('  rtk (third-party, --with-rtk) left in place — remove the binary with');
+    note('  your package manager (e.g. brew uninstall rtk) and its Claude Code');
+    note('  hook per RTK\'s docs.');
   }
 
   // Gemini extension. Same idempotency probe as claude.
@@ -1264,6 +1388,16 @@ FLAGS
                         is required. The value is whitespace-tokenized.
                         Example: --with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"
   --no-mcp-shrink       Skip MCP shrink. (Default.)
+  --with-autoallow[=tier]
+                        Claude Code: merge a curated permission allowlist into
+                        settings.json so safe commands stop prompting. Tiers:
+                        readonly (default — ls/cat/grep/git-read/version
+                        probes) or dev (readonly + test/lint/build runners).
+                        Everything else still prompts. Removed on --uninstall.
+  --with-rtk            Also install RTK (rust-token-killer, third-party MIT)
+                        for tool-output compression, and wire its Claude Code
+                        hook via \`rtk init -g\`. Uses RTK's official installer
+                        (brew, or its published install script). macOS/Linux.
   --uninstall, -u       Remove caveman from this machine.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
@@ -1356,6 +1490,10 @@ async function main() {
     else ctx.results.failed.push(['skills-auto', 'npx skills add (auto) failed']);
     process.stdout.write('\n');
   }
+
+  // Optional stack add-ons
+  if (opts.withAutoallow) { installAutoallow(ctx); process.stdout.write('\n'); }
+  if (opts.withRtk)       { installRtk(ctx);       process.stdout.write('\n'); }
 
   // Per-repo init
   if (opts.withInit) {

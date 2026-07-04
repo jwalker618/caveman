@@ -11,7 +11,11 @@ Caveman shrink what agent *say*. But agent session have four token streams, and 
 | Static context input | CLAUDE.md, memory files, tool descriptions — re-read every session | **`/caveman-compress`** (~46% measured) + **[caveman-shrink](https://www.npmjs.com/package/caveman-shrink)** for MCP tool descriptions |
 | Re-sent conversation history | The whole transcript, re-sent every turn | **The prompt cache** — nothing to install, but easy to silently break (below) |
 
-Install the caveman pieces with the [one-liner](../INSTALL.md). RTK is a separate project — see its repo for install; it sits between your agent and the shell, so it composes with caveman without configuration.
+One install for the whole stack: the caveman [one-liner](../INSTALL.md) with `--with-rtk` also installs RTK via its official installer and wires its Claude Code hook (`rtk init -g`). RTK stays a separate upstream project (we drive its installer, we don't vendor it) — it sits between your agent and the shell, so it composes with caveman without configuration.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash -s -- --with-rtk --with-autoallow
+```
 
 ## Order of levers
 
@@ -41,6 +45,16 @@ The cache is a strict prefix match: any byte that changes early in the prompt in
 Compression can backfire: truncate tool output too hard (or compress context past ambiguity) and the model misses something, then burns an extra round trip to recover. One extra turn re-sends the whole history and generates new output — usually more expensive than whatever the truncation saved.
 
 The tell is **turns per prompt** (assistant round trips per typed prompt), which `/caveman-stats` now reports per session and lifetime. Absolute values vary by work style; the signal is *change* — if the ratio creeps up right after tightening a compression setting, loosen it. Judge tools by tokens per completed task, never tokens per turn.
+
+## Fewer permission prompts (the productivity half)
+
+Token cost is one tax; babysitting permission prompts is the other. Three levels, safest first:
+
+1. **`--with-autoallow`** (ships with caveman's installer) — merges a curated allowlist into `settings.json → permissions.allow` so commands that *can't* hurt you stop prompting: listing, reading, searching, git read ops, version probes. `--with-autoallow=dev` adds test/lint/build runners. Deliberately excluded from both tiers: anything that writes, deletes, installs, or touches the network (`rm`, `find` (has `-delete`), `echo`/`sed` (shell redirection), `curl`, `git push`, `npm install`, …) — those still ask. Removed cleanly on `--uninstall`; audit anytime with `/permissions`.
+2. **Built-in modes** — Shift+Tab in Claude Code cycles to accept-edits mode (file edits stop prompting for the session); `/permissions` lets you allow a specific command pattern permanently the moment it prompts.
+3. **Full bypass** (`--dangerously-skip-permissions`) — exists, works, and is the right call *only* inside a container or VM where the blast radius is disposable. Don't run it on your main machine; one prompt-injected `curl | sh` is all it takes.
+
+The honest framing: prompts exist because the model executes untrusted plans. The allowlist approach keeps the guardrail exactly where it matters (mutations, network, installs) and deletes it where it never mattered (reading what's already on disk).
 
 ## Prompt terse (paste-ready snippet)
 
