@@ -45,6 +45,13 @@ const MCP_SHRINK_PKG = 'caveman-shrink';
 // hook wiring (`rtk init -g`). https://github.com/rtk-ai/rtk
 const RTK_INSTALL_URL = 'https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh';
 const RTK_RELEASES_URL = 'https://github.com/rtk-ai/rtk/releases';
+// Windows: RTK publishes a single zip per release plus a checksums.txt. We
+// download the latest, verify the sha256 against RTK's own manifest, and
+// extract rtk.exe into npm's global prefix — which is on PATH on every
+// machine this installer runs on (Node is a hard requirement).
+const RTK_WIN_ASSET = 'rtk-x86_64-pc-windows-msvc.zip';
+const RTK_WIN_ZIP_URL = `${RTK_RELEASES_URL}/latest/download/${RTK_WIN_ASSET}`;
+const RTK_WIN_SUMS_URL = `${RTK_RELEASES_URL}/latest/download/checksums.txt`;
 // Hook files to copy. Statusline ships in both .sh (macOS/Linux) and .ps1
 // (Windows) flavors — copy both regardless of host OS so a roaming
 // $CLAUDE_CONFIG_DIR (e.g. dotfiles repo) keeps working across platforms.
@@ -1106,29 +1113,86 @@ function installAutoallow(ctx) {
 // brew when available, otherwise its published install script, and `rtk init
 // -g` for the PreToolUse hook. Never fatal — a missing RTK shouldn't sink the
 // caveman install.
-function installRtk(ctx) {
+// Windows RTK auto-install: download → verify sha256 against RTK's own
+// checksums.txt → Expand-Archive into npm's global prefix. Returns true when
+// rtk.exe is in place. Never throws out.
+async function installRtkWindows(ctx) {
+  const { note, warn, ok, opts } = ctx;
+  const prefixR = captureSpawn('npm', ['prefix', '-g']);
+  const npmDir = prefixR.status === 0 ? (prefixR.stdout || '').trim() : '';
+  if (!npmDir || !fs.existsSync(npmDir)) {
+    warn('  cannot resolve npm global prefix — install RTK manually from:');
+    note(`  ${RTK_RELEASES_URL}`);
+    return false;
+  }
+  if (opts.dryRun) {
+    note(`  would download ${RTK_WIN_ZIP_URL}`);
+    note(`  would verify sha256 against checksums.txt, extract rtk.exe into ${npmDir}`);
+    return true;
+  }
+  const tmpZip = path.join(os.tmpdir(), `caveman-rtk-${process.pid}.zip`);
+  const tmpSums = path.join(os.tmpdir(), `caveman-rtk-sums-${process.pid}.txt`);
+  try {
+    await downloadTo(RTK_WIN_ZIP_URL, tmpZip);
+    await downloadTo(RTK_WIN_SUMS_URL, tmpSums);
+    // Standard sha256sum manifest: "<hex>  <filename>" (or "*<filename>").
+    const line = fs.readFileSync(tmpSums, 'utf8').split('\n')
+      .find(l => l.includes(RTK_WIN_ASSET));
+    const want = line ? line.trim().split(/\s+/)[0].toLowerCase() : null;
+    if (!want || sha256File(tmpZip) !== want) {
+      throw new Error('checksum mismatch — refusing to install the downloaded zip');
+    }
+    // Expand-Archive ships with every PowerShell ≥5 — present wherever this
+    // win32 branch can run.
+    const r = runSpawn('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `Expand-Archive -LiteralPath '${tmpZip}' -DestinationPath '${npmDir}' -Force`], null, false);
+    if ((r.status || 0) !== 0) throw new Error('Expand-Archive failed');
+    // Some releases nest the exe one folder deep — surface it to the PATH dir.
+    const exe = path.join(npmDir, 'rtk.exe');
+    if (!fs.existsSync(exe)) {
+      for (const entry of fs.readdirSync(npmDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const nested = path.join(npmDir, entry.name, 'rtk.exe');
+        if (fs.existsSync(nested)) { fs.copyFileSync(nested, exe); break; }
+      }
+    }
+    if (!fs.existsSync(exe)) throw new Error('rtk.exe not found in extracted archive');
+    ok(`  rtk.exe installed to ${npmDir} (sha256-verified, on PATH via npm prefix)`);
+    return true;
+  } catch (e) {
+    warn(`  RTK auto-install failed: ${e && e.message ? e.message : e}`);
+    note(`  manual fallback: ${RTK_RELEASES_URL}`);
+    return false;
+  } finally {
+    for (const f of [tmpZip, tmpSums]) { try { fs.unlinkSync(f); } catch (_) {} }
+  }
+}
+
+async function installRtk(ctx) {
   const { say, note, warn, ok, opts } = ctx;
   say('→ installing RTK (rust-token-killer) tool-output compressor (--with-rtk)');
   if (!hasCmd('rtk')) {
     if (process.platform === 'win32') {
-      warn('  no automated RTK install on Windows — grab a binary from:');
-      note(`  ${RTK_RELEASES_URL}`);
-      ctx.results.skipped.push(['rtk', 'manual install needed on Windows']);
-      return;
-    }
-    let r;
-    if (hasCmd('brew')) {
-      note('  via Homebrew: brew install rtk');
-      r = runSpawn('brew', ['install', 'rtk'], null, opts.dryRun);
+      const placed = await installRtkWindows(ctx);
+      if (!placed) {
+        ctx.results.skipped.push(['rtk', 'windows auto-install failed — see notes above']);
+        return;
+      }
     } else {
-      note(`  via RTK's official install script: ${RTK_INSTALL_URL}`);
-      r = runSpawn('sh', ['-c', `curl -fsSL "${RTK_INSTALL_URL}" | sh`], null, opts.dryRun);
-    }
-    if (!opts.dryRun && ((r && r.status) || 0) !== 0) {
-      warn('  RTK install failed — caveman install continues without it');
-      note(`  manual options: brew install rtk, or ${RTK_RELEASES_URL}`);
-      ctx.results.failed.push(['rtk', 'install command failed']);
-      return;
+      let r;
+      if (hasCmd('brew')) {
+        note('  via Homebrew: brew install rtk');
+        r = runSpawn('brew', ['install', 'rtk'], null, opts.dryRun);
+      } else {
+        note(`  via RTK's official install script: ${RTK_INSTALL_URL}`);
+        r = runSpawn('sh', ['-c', `curl -fsSL "${RTK_INSTALL_URL}" | sh`], null, opts.dryRun);
+      }
+      if (!opts.dryRun && ((r && r.status) || 0) !== 0) {
+        warn('  RTK install failed — caveman install continues without it');
+        note(`  manual options: brew install rtk, or ${RTK_RELEASES_URL}`);
+        ctx.results.failed.push(['rtk', 'install command failed']);
+        return;
+      }
     }
   } else {
     note('  rtk already on PATH — skipping binary install');
@@ -1413,8 +1477,10 @@ FLAGS
                         commands always still prompt. Removed on --uninstall.
   --with-rtk            Also install RTK (rust-token-killer, third-party MIT)
                         for tool-output compression, and wire its Claude Code
-                        hook via \`rtk init -g\`. Uses RTK's official installer
-                        (brew, or its published install script). macOS/Linux.
+                        hook via \`rtk init -g\`. macOS/Linux: RTK's official
+                        installer (brew, or its published script). Windows:
+                        sha256-verified release binary into npm's global
+                        prefix (already on PATH). All platforms, zero steps.
   --uninstall, -u       Remove caveman from this machine.
   --config-dir <path>   Claude Code config dir for hook files + settings.json.
                         Default: \$CLAUDE_CONFIG_DIR or ~/.claude. Does NOT
@@ -1510,7 +1576,7 @@ async function main() {
 
   // Optional stack add-ons
   if (opts.withAutoallow) { installAutoallow(ctx); process.stdout.write('\n'); }
-  if (opts.withRtk)       { installRtk(ctx);       process.stdout.write('\n'); }
+  if (opts.withRtk)       { await installRtk(ctx); process.stdout.write('\n'); }
 
   // Per-repo init
   if (opts.withInit) {
