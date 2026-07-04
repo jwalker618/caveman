@@ -102,6 +102,46 @@ test('removeAutoallow tolerates missing/odd shapes', () => {
 
 // ── Argv framing ────────────────────────────────────────────────────────────
 
+test('auto tier sets defaultMode acceptEdits when unset', () => {
+  const settings = {};
+  PERMS.addAutoallow(settings, 'auto');
+  assert.equal(settings.permissions.defaultMode, 'acceptEdits');
+  assert.equal(settings.permissions.allow.length, PERMS.PRESETS.auto.length);
+});
+
+test('auto tier never clobbers a user-chosen defaultMode', () => {
+  const settings = { permissions: { defaultMode: 'plan' } };
+  PERMS.addAutoallow(settings, 'auto');
+  assert.equal(settings.permissions.defaultMode, 'plan');
+  // but replaces an explicit 'default'
+  const s2 = { permissions: { defaultMode: 'default' } };
+  PERMS.addAutoallow(s2, 'auto');
+  assert.equal(s2.permissions.defaultMode, 'acceptEdits');
+});
+
+test('non-mode tiers never touch defaultMode', () => {
+  const settings = {};
+  PERMS.addAutoallow(settings, 'dev');
+  assert.equal(settings.permissions.defaultMode, undefined);
+});
+
+test('removeAutoallow clears acceptEdits but preserves other modes', () => {
+  const s1 = {};
+  PERMS.addAutoallow(s1, 'auto');
+  PERMS.removeAutoallow(s1);
+  assert.equal(s1.permissions, undefined);
+  const s2 = { permissions: { defaultMode: 'bypassPermissions', allow: ['Bash(ls:*)'] } };
+  PERMS.removeAutoallow(s2);
+  assert.equal(s2.permissions.defaultMode, 'bypassPermissions');
+});
+
+test('MODE_BY_TIER only ever maps to acceptEdits', () => {
+  // Guardrail: presets must never silently escalate to bypassPermissions.
+  for (const mode of Object.values(PERMS.MODE_BY_TIER)) {
+    assert.equal(mode, 'acceptEdits');
+  }
+});
+
 test('--with-autoallow=bogus exits 2 naming valid tiers', () => {
   const r = run('--with-autoallow=bogus');
   assert.equal(r.status, 2);

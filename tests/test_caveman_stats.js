@@ -130,6 +130,48 @@ test('cacheHitRate handles empty usage', () => {
   assert.strictEqual(cacheHitRate({ inputTokens: 100, cacheReadTokens: 900 }), 0.9);
 });
 
+test('extractRtkSaved finds the largest saved figure in unknown shapes', () => {
+  const { extractRtkSaved } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
+  assert.strictEqual(extractRtkSaved({ lifetime: { tokens_saved: 12345 }, daily: { tokens_saved: 100 } }), 12345);
+  assert.strictEqual(extractRtkSaved({ summary: { total_savings: 500 } }), 500);
+  assert.strictEqual(extractRtkSaved({ nothing: { relevant: 1 } }), null);
+  assert.strictEqual(extractRtkSaved(null), null);
+});
+
+test('folds RTK measured savings into session and lifetime views', (tmp) => {
+  if (process.platform === 'win32') return; // PATH-shim test uses a shell script
+  // Fake rtk on PATH answering `rtk gain --all --format json`.
+  fs.writeFileSync(path.join(tmp, 'rtk'),
+    '#!/bin/sh\necho \'{"lifetime":{"tokens_saved":12345},"daily":{"tokens_saved":100}}\'\n',
+    { mode: 0o755 });
+  const claudeDir = path.join(tmp, '.claude');
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+  ]);
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const env = { ...process.env, PATH: `${tmp}:${process.env.PATH}`, CLAUDE_CONFIG_DIR: claudeDir };
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], { encoding: 'utf8', env });
+  assert.match(out, /RTK tool-output saved: 12,345 \(lifetime, measured by rtk\)/);
+  const all = execFileSync(process.execPath, [STATS, '--all'], { encoding: 'utf8', env });
+  // history got one snapshot from the session run above: est_saved = 100/0.35-100 = 186
+  assert.match(all, /RTK measured saved:\s+12,345/);
+  assert.match(all, /Joined lifetime:\s+12,531 tokens \(186 caveman est\. \+ 12,345 RTK measured\)/);
+});
+
+test('stats output labels measured vs estimated sections', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 100 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const out = execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  assert.match(out, /Measured \(from session log\)/);
+  assert.match(out, /Estimated \(benchmark ratio — not a measurement\)/);
+});
+
 test('shows full-mode savings estimate when flag is full', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { usage: { output_tokens: 350 } } },

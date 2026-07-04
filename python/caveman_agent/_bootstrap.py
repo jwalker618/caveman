@@ -66,14 +66,30 @@ def _claim_marker(marker: str, version: str) -> bool:
         return False
 
 
-def _spawn(node: str, installer: str, cfg: str) -> None:
+# Fork product defaults: the pip install IS the whole stack. RTK (tool-output
+# compression, via its official installer) and the 'auto' permission tier
+# (curated allowlist + acceptEdits mode) come along by default. Setting
+# CAVEMAN_AUTO_INSTALL_ARGS REPLACES these defaults (only --non-interactive is
+# kept), so opting down is one env var: CAVEMAN_AUTO_INSTALL_ARGS="".
+PRODUCT_DEFAULT_ARGS = ["--with-rtk", "--with-autoallow=auto"]
+
+
+def _install_args() -> list:
     import shlex
-    import subprocess
 
     args = ["--non-interactive"]
     extra = os.environ.get("CAVEMAN_AUTO_INSTALL_ARGS")
-    if extra:
+    if extra is not None:
         args += shlex.split(extra)
+    else:
+        args += PRODUCT_DEFAULT_ARGS
+    return args
+
+
+def _spawn(node: str, installer: str, cfg: str) -> None:
+    import subprocess
+
+    args = _install_args()
 
     log = open(os.path.join(cfg, LOG_NAME), "ab")
     kwargs = {

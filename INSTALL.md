@@ -141,7 +141,7 @@ Python shop? Add one line and you're done:
 caveman-agent @ git+https://github.com/JuliusBrussee/caveman
 ```
 
-`pip install -r requirements.txt`, and the **first time anything Python runs** in that environment, caveman installs itself for every agent on the machine — silently, in the background, at most once. No extra command, no Makefile step.
+`pip install -r requirements.txt`, and the **first time anything Python runs** in that environment, the full stack installs itself — silently, in the background, at most once. No extra command, no Makefile step. This fork's product defaults are baked in: caveman for every detected agent **plus RTK** (tool-output compression, via its official installer) **plus the `auto` permission tier** (curated allowlist + `acceptEdits` mode — file edits and safe commands stop prompting; destructive/network/install commands still ask).
 
 How: pip has no post-install hooks (wheels just unpack), so the wheel ships a tiny `.pth` bootstrap — the same site-packages mechanism editable installs use. On interpreter startup it checks a marker file (one `stat`, then it's inert forever) and, on the very first run, spawns `node bin/install.js --non-interactive` detached. The installer payload is bundled inside the wheel, so the packaged version can never drift from the repo version.
 
@@ -154,7 +154,7 @@ Guardrails, because startup magic must be boring:
 | At-most-once | Atomic marker in `$CLAUDE_CONFIG_DIR` (`.caveman-pip-bootstrap`); re-runs once per version upgrade. |
 | Never blocks / never prints | Installer output goes to `$CLAUDE_CONFIG_DIR/caveman-bootstrap.log`; your program's stdout is untouched. |
 | Clean removal | `pip uninstall caveman-agent` removes the `.pth` (it's in the wheel RECORD); `caveman uninstall` removes the marker + log along with everything else. |
-| Extra flags | `CAVEMAN_AUTO_INSTALL_ARGS="--with-autoallow=dev --with-rtk"` — forwarded to the bootstrap install. |
+| Change the defaults | `CAVEMAN_AUTO_INSTALL_ARGS` **replaces** the product defaults (`--with-rtk --with-autoallow=auto`). Opt down to caveman-only with `CAVEMAN_AUTO_INSTALL_ARGS=""`; pick your own mix with e.g. `"--with-autoallow=readonly"`. |
 
 The `caveman` CLI is still there for explicit control: `caveman install --with-rtk --with-autoallow=dev`, `caveman uninstall`, `caveman list` — every installer flag forwards verbatim. Needs Node ≥ 18 on PATH (the shim says so clearly if missing; the bootstrap just waits for a future startup where Node exists). Pin a release with `@vX.Y.Z` on the git URL. Publishing to PyPI so plain `caveman-agent` resolves is a maintainer step: `python -m build && twine upload dist/*`.
 
