@@ -121,6 +121,8 @@ Useful flags:
 | `--with-init` | Drop always-on rule files into the current repo (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`) and, if OpenClaw is on the box, append the bootstrap block to `~/.openclaw/workspace/SOUL.md`. |
 | `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required — caveman-shrink is a proxy and exits immediately without one. Example: `--with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"`. The value is split on whitespace; for paths-with-spaces, install via `node bin/install.js` from a clone or edit `~/.claude.json` after a stub install. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
+| `--with-autoallow[=tier]` | Claude Code: merge a curated permission allowlist into `settings.json` so safe commands stop asking. `readonly` (default) auto-allows inspection only — `ls`, `cat`, `grep`/`rg`, git read ops (`status`/`log`/`diff`/`show`/`branch`/`blame`), version probes. `=dev` adds test/lint/build runners (`npm test`, `pytest`, `cargo test`, `go test`, `make test`, …). Nothing that writes, deletes, installs, or touches the network is ever included — those still prompt. Review with `/permissions`; removed cleanly on `--uninstall`. |
+| `--with-rtk` | Also install [RTK (rust-token-killer)](https://github.com/rtk-ai/rtk) — third-party MIT tool that compresses shell/test/git output 60–90% before it reaches the model — and wire its Claude Code hook (`rtk init -g`). Uses RTK's official installer (Homebrew if present, else its published install script). macOS/Linux; Windows is a manual binary download. One flag = the whole [token stack](docs/token-economy.md) in a single install. |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer. (Default: on.) |
 | `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
 | `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
@@ -129,6 +131,32 @@ Useful flags:
 | `--list` | Print full agent matrix and exit. |
 | `--force` | Re-run even if already installed. |
 | `--uninstall` | Remove everything. See below. |
+
+## pip / requirements.txt
+
+Python shop? Add one line and you're done:
+
+```
+# requirements.txt
+caveman-agent @ git+https://github.com/JuliusBrussee/caveman
+```
+
+`pip install -r requirements.txt`, and the **first time anything Python runs** in that environment, caveman installs itself for every agent on the machine — silently, in the background, at most once. No extra command, no Makefile step.
+
+How: pip has no post-install hooks (wheels just unpack), so the wheel ships a tiny `.pth` bootstrap — the same site-packages mechanism editable installs use. On interpreter startup it checks a marker file (one `stat`, then it's inert forever) and, on the very first run, spawns `node bin/install.js --non-interactive` detached. The installer payload is bundled inside the wheel, so the packaged version can never drift from the repo version.
+
+Guardrails, because startup magic must be boring:
+
+| Guard | Behavior |
+|---|---|
+| `CAVEMAN_NO_AUTO_INSTALL=1` | Kill switch — bootstrap never runs. Use `caveman install` manually. |
+| `CI` env var set | Skipped automatically — build machines shouldn't grow agent config as a dependency side effect. |
+| At-most-once | Atomic marker in `$CLAUDE_CONFIG_DIR` (`.caveman-pip-bootstrap`); re-runs once per version upgrade. |
+| Never blocks / never prints | Installer output goes to `$CLAUDE_CONFIG_DIR/caveman-bootstrap.log`; your program's stdout is untouched. |
+| Clean removal | `pip uninstall caveman-agent` removes the `.pth` (it's in the wheel RECORD); `caveman uninstall` removes the marker + log along with everything else. |
+| Extra flags | `CAVEMAN_AUTO_INSTALL_ARGS="--with-autoallow=dev --with-rtk"` — forwarded to the bootstrap install. |
+
+The `caveman` CLI is still there for explicit control: `caveman install --with-rtk --with-autoallow=dev`, `caveman uninstall`, `caveman list` — every installer flag forwards verbatim. Needs Node ≥ 18 on PATH (the shim says so clearly if missing; the bootstrap just waits for a future startup where Node exists). Pin a release with `@vX.Y.Z` on the git URL. Publishing to PyPI so plain `caveman-agent` resolves is a maintainer step: `python -m build && twine upload dist/*`.
 
 ## Always-on rules
 

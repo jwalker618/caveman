@@ -112,6 +112,8 @@ irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | i
 
 **Trigger:** type `/caveman` or say "talk like caveman". Stop with "normal mode".
 
+Python shop? Put `caveman-agent @ git+https://github.com/JuliusBrussee/caveman` in requirements.txt. That it. First time Python run after install, caveman set itself up in background — once, silently, skips CI, opt out with one env var. Details in [INSTALL.md](./INSTALL.md#pip--requirementstxt).
+
 One agent only, manual command, or any of 30+ other agents → [**INSTALL.md**](./INSTALL.md).
 Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.
 
@@ -122,7 +124,7 @@ Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman 
 | `/caveman [lite\|full\|ultra\|wenyan]` | Compress every reply. Levels stick until session end. |
 | `/caveman-commit` | Conventional Commit messages, ≤50 char subject. Why over what. |
 | `/caveman-review` | One-line PR comments: `L42: 🔴 bug: user null. Add guard.` |
-| `/caveman-stats` | Real session token usage + lifetime savings + USD. Tweetable line via `--share`. |
+| `/caveman-stats` | Real session token usage, cache hit rate, turns per prompt + lifetime savings in USD. Tweetable line via `--share`. Warns when something silently breaks your prompt cache. |
 | `/caveman-compress <file>` | Rewrite memory file (e.g. `CLAUDE.md`) into caveman-speak. Cuts ~46% input tokens every session. Code/URLs/paths byte-preserved. |
 | `caveman-shrink` | MCP middleware. Wraps any MCP server, compresses tool descriptions. [npm](https://www.npmjs.com/package/caveman-shrink). |
 | `cavecrew-*` | Caveman subagents (investigator/builder/reviewer). ~60% fewer tokens than vanilla, main context lasts longer. |
@@ -244,6 +246,7 @@ One command. Five skill. Cave well stocked.
 ## Links
 
 - [INSTALL.md](./INSTALL.md) — full install matrix, all flags, per-agent detail
+- [docs/token-economy.md](./docs/token-economy.md) — whole token stack: what caveman cover, what else help (prompt cache, tool-output shrinkers), what waste time
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — how to send patch
 - [CLAUDE.md](./CLAUDE.md) — maintainer guide (file ownership, hook architecture, CI)
 - [docs/](./docs/) — extra guides (Windows install, etc.)
