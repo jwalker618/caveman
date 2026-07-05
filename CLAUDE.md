@@ -89,6 +89,7 @@ caveman/
 | `skills/caveman-commit/SKILL.md` | Caveman commit message behavior. Fully independent skill. |
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
 | `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
+| `skills/caveman-prune/SKILL.md` | Context staleness audit — flags files unreferenced for N interactions, suggests drops. One-shot, advisory only, never removes anything. |
 | `skills/caveman-compress/SKILL.md` | Compress sub-skill behavior. |
 | `skills/cavecrew/SKILL.md` | Cavecrew decision guide — when to delegate to caveman subagents vs vanilla. Edit only here. |
 | `agents/cavecrew-investigator.md` | Read-only locator subagent (haiku). Output contract: `path:line — symbol — note`. |
@@ -113,7 +114,7 @@ What's left is the Claude Code plugin distribution (required by the plugin loade
 | `plugins/caveman/agents/cavecrew-*.md` | `agents/cavecrew-*.md` |
 | `dist/caveman.skill` | ZIP of `skills/caveman/` directory (gitignored; rebuilt by CI on release) |
 
-Skills not in this table (`caveman-commit`, `caveman-review`, `caveman-help`, `caveman-stats`) are not mirrored into the Claude Code plugin distribution by CI. They reach Claude Code through the standalone hook + skill install path, and reach other agents via `npx skills add`. A `plugins/caveman/skills/caveman-stats/` directory is currently checked in as a hand-committed copy; the sync workflow does not touch it, so don't rely on edits there to propagate.
+Skills not in this table (`caveman-commit`, `caveman-review`, `caveman-help`, `caveman-stats`, `caveman-prune`) are not mirrored into the Claude Code plugin distribution by CI. They reach Claude Code through the standalone hook + skill install path, and reach other agents via `npx skills add`. A `plugins/caveman/skills/caveman-stats/` directory is currently checked in as a hand-committed copy; the sync workflow does not touch it, so don't rely on edits there to propagate.
 
 ---
 
@@ -227,6 +228,10 @@ Caveman drops to normal prose for: security warnings, irreversible action confir
 Sub-skill in `skills/caveman-compress/SKILL.md`. Takes file path, compresses prose to caveman style, writes to original path, saves backup at `<filename>.original.md`. Validates headings, code blocks, URLs, file paths, commands preserved. Retries up to 2 times on failure with targeted patches only. Requires Python 3.10+.
 
 The slash command is `/caveman-compress` everywhere — same name in plugin and standalone install. CI no longer renames the directory on sync (the old `caveman-compress/` → `skills/compress/` sed rename is gone now that the source lives at `skills/caveman-compress/`).
+
+### caveman-prune
+
+One-shot context audit in `skills/caveman-prune/SKILL.md`. On `/caveman-prune [N]` the model inventories files in conversation context, flags ones unreferenced/unmodified for N interactions (default 5), and suggests drops. Advisory only — no flag write, no mode, never deletes. Honest-weights rule: sizes only from actually-observed reads, otherwise `size unknown`. Surfaces with pin lists (e.g. IDE context pinning) map suggestions to unpin actions.
 
 ### caveman-commit / caveman-review
 
