@@ -27,9 +27,7 @@ const PERMS = require('./lib/permissions');
 const OPENCLAW = require('./lib/openclaw');
 const { stripOpencodeAgentTools } = require('./lib/opencode-agent');
 
-// This fork is the source of truth for this deployment's stack — plugin
-// marketplace and skills installs must pull from it, not upstream.
-const REPO = 'jwalker618/caveman';
+const REPO = 'JuliusBrussee/caveman';
 // Pin remote fetches to an immutable release tag, not the moving `main`
 // branch (issue #261). A push to main must never silently change what a
 // curl|bash / detached-script install downloads and executes. Bump this to
